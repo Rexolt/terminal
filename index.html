@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>terminál</title>
+  <link href="https://fonts.googleapis.com/css?family=VT323" rel="stylesheet">
+  <style>
+    body {
+      margin:0;
+      background:#000;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      height:100vh;
+      overflow:hidden;
+      font-family:'VT323', monospace;
+      color: #14fdce;
+      font-size: 24px;
+    }
+
+    .frame {
+      position: relative;
+      width: 80vw;
+      height: 60vh;
+      background: #001d3d;
+      border-radius: 2rem;
+      border: 1rem solid;
+      border-bottom-color: #121212;
+      border-left-color: #080808;
+      border-right-color: #080808;
+      border-top-color: #020202;
+      box-shadow:
+        inset 0 0 18rem black,
+        inset 0 0 3rem black,
+        0 0 10rem black;
+      overflow:auto;
+      display:flex;
+      flex-direction:column;
+      justify-content:flex-start;
+      align-items:flex-start;
+      padding: 2rem;
+      position: relative;
+      filter: contrast(1.3) saturate(1.2);
+    }
+
+    h1 {
+      font-size: 4rem;
+      margin:0 0 1rem 0;
+      text-transform: uppercase;
+      color:#00ff99;
+      text-shadow: 0 0 4px #00ff99;
+    }
+
+    .output {
+      flex:1;
+      width:100%;
+      overflow:auto;
+      text-shadow: 0 0 1rem #00ff99;
+      white-space: pre-wrap;
+      display:flex;
+      flex-direction:column;
+      justify-content:flex-start;
+    }
+
+    .scanlines {
+      background: linear-gradient(
+        to bottom,
+        rgba(255,255,255,0),
+        rgba(255,255,255,0) 50%,
+        rgba(0,0,0,0.2) 70%,
+        rgba(0,0,0,0.6)
+      );
+      background-size: 100% 0.3rem;
+      border-radius: 2rem;
+      position: absolute;
+      top:0; left:0; right:0; bottom:0;
+      pointer-events:none;
+      z-index:5;
+    }
+
+    .glow {
+      animation: crt-glow 60s infinite; 
+      background:
+        radial-gradient(circle at center,
+        rgba(27,212,89,1) 0%,
+        rgba(27,212,89,0.88) 58%,
+        rgba(21,235,92,0.57) 80%,
+        rgba(19,94,29,0.27) 93%,
+        rgba(10,23,12,0) 100%);
+      opacity: 0.15;
+      pointer-events: none; 
+      position: absolute;
+      top:0;left:0;right:0;bottom:0;
+      z-index:4;
+    }
+
+    @keyframes crt-glow {
+      0% { opacity:0.1; }
+      50% {opacity:0.2;}
+      100% {opacity:0.1;}
+    }
+
+    .prompt-line {
+      display:block;
+      margin-top: 1rem;
+    }
+
+    .prompt-prefix {
+      color:#ffeb3b;
+    }
+
+    .cursor {
+      display:inline-block;
+      width: 10px;
+      height: 20px;
+      background:#ff4444;
+      margin-left:2px;
+      animation: blink 1s infinite alternate;
+      vertical-align:text-bottom;
+    }
+
+    @keyframes blink {
+      0% {opacity:1;}
+      100% {opacity:0;}
+    }
+
+    a,
+    a:visited {
+      color: #14fdce;
+      border-bottom:0.1rem solid #14fdce;
+      text-decoration:none;
+    }
+
+    a:hover {
+      background:#14fdce;
+      color:#031e11;
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <h1>terminál</h1>
+    <div class="output" id="output"></div>
+    <div class="scanlines"></div>
+    <div class="glow"></div>
+  </div>
+
+  <script>
+    // Egyszerű fájlrendszer:
+    // /: bin etc home ady
+    // ady: core (mappa), fun.txt, hints.txt, secret.txt
+    // Csak az ady mappába lehet belépni, más mappák tiltottak
+    // core mappába sem lehet belépni
+    // nano fájlnév -> kiírja a fájl tartalmát
+    // ls -> listázás
+    // rm -rf core az ady mappában -> átirányítás videóra
+    const filesystem = {
+      '/': {
+        type:'dir',
+        files:{
+          'bin': {type:'dir', files:{}},
+          'etc': {type:'dir', files:{}},
+          'home': {type:'dir', files:{}},
+          'ady': {
+            type:'dir',
+            files:{
+              'core': {type:'dir', files:{}},
+              'fun.txt': {type:'file', content:'Ez csak egy mókás kis fájl.\nHaha, talán nézz körül jobban...'},
+              'hints.txt': {type:'file', content:'Lehet, hogy a "core" fontos?\nVagy töröld?\nKi tudja...'},
+              'secret.txt': {type:'file', content:'Megtaláltad a titkos fájlt!\nNagyon ügyes vagy!'}
+            }
+          }
+        }
+      }
+    };
+
+    let currentPath = []; 
+
+    const output = document.getElementById('output');
+    let currentInput = "";
+    let inputActive = true;
+
+    function getCurrentDir() {
+      let dir = filesystem['/'];
+      for(let p of currentPath) {
+        if(dir.type==='dir' && dir.files[p]) {
+          dir = dir.files[p];
+        } else {
+          return null;
+        }
+      }
+      return dir;
+    }
+
+    function scrollToBottom() {
+      output.scrollTop = output.scrollHeight;
+    }
+
+    function promptPrefix() {
+      let pathStr = '/';
+      if(currentPath.length>0) {
+        pathStr += currentPath.join('/');
+        if(!pathStr.endsWith('/')) pathStr+='/';
+      }
+      return pathStr + '>';
+    }
+
+    
+    function renderPrompt() {
+      const promptLine = document.createElement('div');
+      promptLine.classList.add('prompt-line');
+      promptLine.innerHTML = `<span class="prompt-prefix">${promptPrefix()}</span><span id="currentInput">${currentInput}</span><span class="cursor"></span>`;
+      output.appendChild(promptLine);
+      scrollToBottom();
+    }
+
+    
+    renderPrompt();
+
+    document.addEventListener('keydown', (e) => {
+      if(!inputActive) return;
+      const key = e.key;
+      if(key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        currentInput += key;
+        updatePromptLine();
+      } else if(key === 'Backspace') {
+        e.preventDefault();
+        currentInput = currentInput.slice(0,-1);
+        updatePromptLine();
+      } else if(key === 'Enter') {
+        e.preventDefault();
+        
+        lockPromptLine();
+        
+        executeCommand(currentInput);
+        currentInput = "";
+        
+        renderPrompt();
+      }
+    });
+
+    function updatePromptLine() {
+      const currInputEl = document.getElementById('currentInput');
+      if(currInputEl) {
+        currInputEl.textContent = currentInput;
+      }
+      scrollToBottom();
+    }
+
+    
+    function lockPromptLine() {
+      const currInputEl = document.getElementById('currentInput');
+      if(currInputEl) {
+        const cursorEl = currInputEl.nextElementSibling;
+        if(cursorEl && cursorEl.classList.contains('cursor')) {
+          cursorEl.remove();
+        }
+      }
+      scrollToBottom();
+    }
+
+    function executeCommand(cmd) {
+      const trimmed = cmd.trim();
+      
+      if(trimmed==='') return;
+
+      const parts = trimmed.split(' ');
+      const command = parts[0];
+      const args = parts.slice(1);
+
+      const resultLine = document.createElement('div');
+      resultLine.style.marginTop = '1rem';
+
+      switch(command) {
+        case 'help':
+          resultLine.textContent = "Elérhető parancsok: ls, cd, help, rm, nano  -Hmmm Ez egy linux?";
+          break;
+        case 'ls':
+          const dir = getCurrentDir();
+          if(dir && dir.type==='dir') {
+            const keys = Object.keys(dir.files);
+            resultLine.textContent = keys.length === 0 ? "(üres)" : keys.join('  ');
+          } else {
+            resultLine.textContent = "Hiba: nem könyvtár.";
+          }
+          break;
+        case 'cd':
+          if(args.length===0) {
+            resultLine.textContent = "cd: Adj meg egy könyvtárnevet.";
+          } else {
+            const target = args[0];
+            if(target === '..') {
+              if(currentPath.length > 0) currentPath.pop();
+            } else {
+              const cdir = getCurrentDir();
+              if(cdir && cdir.type==='dir' && cdir.files[target] && cdir.files[target].type==='dir') {
+            
+                if(currentPath.length===0 && target==='ady') {
+                  currentPath.push(target);
+                } else if(target==='core') {
+                  
+                  resultLine.textContent = "Nincs engedélyed.";
+                } else {
+                  
+                  resultLine.textContent = "Nincs engedélyed.";
+                }
+              } else {
+                resultLine.textContent = `cd: '${target}': Nincs ilyen könyvtár.`;
+              }
+            }
+          }
+          break;
+        case 'rm':
+          if(args.join(' ') === '-rf core') {
+            // Ha az ady mappában vagyunk
+            if(currentPath.length===1 && currentPath[0]==='ady') {
+              resultLine.textContent = "Törlés folyamatban... Átirányítás.";
+              output.appendChild(resultLine);
+              scrollToBottom();
+              setTimeout(()=>{
+                window.location.href = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+              },2000);
+              return; 
+            } else {
+              resultLine.textContent = "Hozzáférés megtagadva vagy nincs ilyen útvonal.";
+            }
+          } else {
+            resultLine.textContent = "rm: hiányzik a cél vagy a kapcsolók (pl. rm -rf core)";
+          }
+          break;
+        case 'nano':
+          if(args.length===0) {
+            resultLine.textContent = "nano: Adj meg egy fájlnevet.";
+          } else {
+            const filename = args[0];
+            const cdir = getCurrentDir();
+            if(cdir && cdir.type==='dir' && cdir.files[filename] && cdir.files[filename].type==='file') {
+              resultLine.textContent = `--- ${filename} tartalma ---\n${cdir.files[filename].content}\n-------------------------`;
+            } else {
+              resultLine.textContent = `nano: '${filename}': Nincs ilyen fájl.`;
+            }
+          }
+          break;
+        default:
+          resultLine.textContent = `Ismeretlen parancs: ${command}. Próbáld: help`;
+      }
+
+      output.appendChild(resultLine);
+      scrollToBottom();
+    }
+  </script>
+</body>
+</html>
